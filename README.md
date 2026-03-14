@@ -94,6 +94,8 @@ Scores are additive. More signals = higher score = more capable model.
 | `/usage/teams` | GET | Team-level summary |
 | `/calibration` | GET | Shadow calibration report |
 
+> `/stats`, `/usage`, and `/calibration` require `Authorization: Bearer <token>` when `CCM_ADMIN_TOKEN` is set. Unset = open access (dev mode).
+
 ### `/usage` — Team Governance
 
 See who's spending what across your team:
@@ -209,6 +211,7 @@ All env vars use the `CCM_` prefix. Set in `.env`:
 | `CCM_THRESHOLD_COMPLEX` | `3.5` | Score cutoff for Opus |
 | `CCM_FORCE_MODEL` | — | Force all requests to one model |
 | `CCM_GOVERNANCE_ENABLED` | `true` | Enable /usage governance endpoints |
+| `CCM_ADMIN_TOKEN` | — | Protect admin endpoints (`Bearer` auth) |
 | `CCM_CALIBRATION_ENABLED` | `false` | Enable shadow testing |
 | `CCM_CALIBRATION_SAMPLE_RATE` | `0.2` | Fraction of prompts to shadow |
 | `CCM_CALIBRATION_MAX_PROMPTS` | `50` | Stop after N shadows |
@@ -229,7 +232,8 @@ tests/
 ├── test_classifier.py
 ├── test_cost.py
 ├── test_equivalence.py
-└── test_governance.py
+├── test_governance.py
+└── test_security.py
 Dockerfile
 docker-compose.yml
 ```
@@ -241,7 +245,7 @@ source .venv/bin/activate
 pytest tests/ -v
 ```
 
-63 tests covering classification scoring, cost calculation, equivalence comparison, and governance endpoints.
+76 tests covering classification, cost calculation, equivalence comparison, governance endpoints, and security (admin auth, override validation).
 
 ## CC-RLM Integration
 

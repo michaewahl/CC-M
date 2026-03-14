@@ -8,6 +8,7 @@ and routes to the cheapest viable Claude model.
 import asyncio
 import json
 import logging
+from contextlib import asynccontextmanager
 
 import httpx
 from fastapi import FastAPI, Request, Depends, HTTPException
@@ -34,10 +35,6 @@ async def require_admin(request: Request) -> None:
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("ccm")
 
-app = FastAPI(title="CC-M — Claude Model Router")
-if settings.governance_enabled:
-    app.include_router(governance_router, dependencies=[Depends(require_admin)])
-
 _client: httpx.AsyncClient | None = None
 _tracker: CostTracker | None = None
 _shadow: ShadowRunner | None = None
@@ -49,8 +46,8 @@ _TIER_TO_MODEL = {
 }
 
 
-@app.on_event("startup")
-async def startup():
+@asynccontextmanager
+async def lifespan(app: FastAPI):
     global _client, _tracker, _shadow
     _client = httpx.AsyncClient(timeout=settings.request_timeout)
     _tracker = CostTracker(settings.store_path)
@@ -63,12 +60,14 @@ async def startup():
     if settings.calibration_enabled:
         log.info("  Calibration: ON (sample_rate=%.0f%%, max=%d)",
                  settings.calibration_sample_rate * 100, settings.calibration_max_prompts)
-
-
-@app.on_event("shutdown")
-async def shutdown():
+    yield
     if _client:
         await _client.aclose()
+
+
+app = FastAPI(title="CC-M — Claude Model Router", lifespan=lifespan)
+if settings.governance_enabled:
+    app.include_router(governance_router, dependencies=[Depends(require_admin)])
 
 
 @app.get("/health")
