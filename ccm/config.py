@@ -9,9 +9,9 @@ class CCMSettings(BaseSettings):
     anthropic_base_url: str = "https://api.anthropic.com"
 
     # Model tier mapping
-    model_simple: str = "claude-haiku-4-5-20241022"
-    model_medium: str = "claude-sonnet-4-6-20250514"
-    model_complex: str = "claude-opus-4-6-20250514"
+    model_simple: str = "claude-haiku-4-5-20251001"
+    model_medium: str = "claude-sonnet-4-6"
+    model_complex: str = "claude-opus-4-6"
 
     # Classification score thresholds
     threshold_medium: float = 1.5

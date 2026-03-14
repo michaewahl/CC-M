@@ -21,9 +21,9 @@ When developers use Claude through the API, they pay per request. The pricing di
 |-------|---------------------------|----------------------------|----------|
 | Haiku 4.5 | $1.00 | $5.00 | Simple tasks, explanations, formatting |
 | Sonnet 4.6 | $3.00 | $15.00 | Bug fixes, code writing, moderate tasks |
-| Opus 4.6 | $15.00 | $75.00 | Complex reasoning, architecture, multi-file refactors |
+| Opus 4.6 | $5.00 | $25.00 | Complex reasoning, architecture, multi-file refactors |
 
-**Opus costs 15x more than Haiku for input and 15x more for output.** But for a question like "What does this function do?" — Haiku gives you the same quality answer.
+**Opus costs 5x more than Haiku for input and 5x more for output.** But for a question like "What does this function do?" — Haiku gives you the same quality answer.
 
 If you're on a subscription plan (Pro/Max), you have limited Opus usage per day. Using Opus for simple tasks means you run out faster when you actually need it.
 
@@ -94,7 +94,7 @@ Every request through CC-M gets classified and routed. No configuration needed b
 
 Response headers tell you what happened:
 ```
-X-CCM-Model-Used: claude-haiku-4-5-20241022
+X-CCM-Model-Used: claude-haiku-4-5-20251001
 X-CCM-Complexity-Tier: SIMPLE
 X-CCM-Complexity-Score: 0.0
 ```
@@ -158,12 +158,12 @@ Sometimes you *know* you need Opus. Two ways to force it:
 
 **Per-request** (header):
 ```
-X-CCM-Model-Override: claude-opus-4-6-20250514
+X-CCM-Model-Override: claude-opus-4-6
 ```
 
 **Globally** (env var):
 ```
-CCM_FORCE_MODEL=claude-opus-4-6-20250514
+CCM_FORCE_MODEL=claude-opus-4-6
 ```
 
 ---
@@ -203,9 +203,9 @@ All settings use environment variables with the `CCM_` prefix. Set them in your 
 |----------|---------|-------------|
 | `CCM_ANTHROPIC_API_KEY` | *(required)* | Your Anthropic API key |
 | `CCM_PORT` | 8082 | Port CC-M runs on |
-| `CCM_MODEL_SIMPLE` | claude-haiku-4-5-20241022 | Model for simple tasks |
-| `CCM_MODEL_MEDIUM` | claude-sonnet-4-6-20250514 | Model for medium tasks |
-| `CCM_MODEL_COMPLEX` | claude-opus-4-6-20250514 | Model for complex tasks |
+| `CCM_MODEL_SIMPLE` | claude-haiku-4-5-20251001 | Model for simple tasks |
+| `CCM_MODEL_MEDIUM` | claude-sonnet-4-6 | Model for medium tasks |
+| `CCM_MODEL_COMPLEX` | claude-opus-4-6 | Model for complex tasks |
 | `CCM_THRESHOLD_MEDIUM` | 1.5 | Score cutoff for Sonnet |
 | `CCM_THRESHOLD_COMPLEX` | 3.5 | Score cutoff for Opus |
 | `CCM_FORCE_MODEL` | *(empty)* | Force all requests to one model |

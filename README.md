@@ -14,9 +14,9 @@ Your App → CC-M (localhost:8082) → api.anthropic.com
 |-------|-------------|---------------|----------|
 | Haiku 4.5 | $1 | $5 | Explanations, formatting, simple tasks |
 | Sonnet 4.6 | $3 | $15 | Bug fixes, code generation |
-| Opus 4.6 | $15 | $75 | Architecture, complex refactors, deep reasoning |
+| Opus 4.6 | $5 | $25 | Architecture, complex refactors, deep reasoning |
 
-Opus costs **15x more** than Haiku. But "What does this function do?" gets the same answer from both. CC-M stops you from paying Opus prices for Haiku-level tasks.
+Opus costs **5x more** than Haiku. But "What does this function do?" gets the same answer from both. CC-M stops you from paying Opus prices for Haiku-level tasks.
 
 ## Quick Start
 
@@ -53,7 +53,7 @@ curl -X POST http://localhost:8082/v1/messages \
   -H "x-api-key: $ANTHROPIC_API_KEY" \
   -H "content-type: application/json" \
   -d '{
-    "model": "claude-opus-4-6-20250514",
+    "model": "claude-opus-4-6",
     "messages": [{"role": "user", "content": "What is a Python decorator?"}],
     "max_tokens": 200
   }'
@@ -61,7 +61,7 @@ curl -X POST http://localhost:8082/v1/messages \
 
 Check the response headers — CC-M routed this to **Haiku** instead of Opus:
 ```
-X-CCM-Model-Used: claude-haiku-4-5-20241022
+X-CCM-Model-Used: claude-haiku-4-5-20251001
 X-CCM-Complexity-Tier: SIMPLE
 X-CCM-Complexity-Score: 0.0
 ```
@@ -152,10 +152,10 @@ When you *know* you need Opus:
 
 ```bash
 # Per-request
-curl -H "X-CCM-Model-Override: claude-opus-4-6-20250514" ...
+curl -H "X-CCM-Model-Override: claude-opus-4-6" ...
 
 # Or globally in .env
-CCM_FORCE_MODEL=claude-opus-4-6-20250514
+CCM_FORCE_MODEL=claude-opus-4-6
 ```
 
 ## Configuration
@@ -166,9 +166,9 @@ All env vars use the `CCM_` prefix. Set in `.env`:
 |----------|---------|-------------|
 | `CCM_ANTHROPIC_API_KEY` | — | Your Anthropic API key |
 | `CCM_PORT` | `8082` | Server port |
-| `CCM_MODEL_SIMPLE` | `claude-haiku-4-5-20241022` | Model for simple tasks |
-| `CCM_MODEL_MEDIUM` | `claude-sonnet-4-6-20250514` | Model for medium tasks |
-| `CCM_MODEL_COMPLEX` | `claude-opus-4-6-20250514` | Model for complex tasks |
+| `CCM_MODEL_SIMPLE` | `claude-haiku-4-5-20251001` | Model for simple tasks |
+| `CCM_MODEL_MEDIUM` | `claude-sonnet-4-6` | Model for medium tasks |
+| `CCM_MODEL_COMPLEX` | `claude-opus-4-6` | Model for complex tasks |
 | `CCM_THRESHOLD_MEDIUM` | `1.5` | Score cutoff for Sonnet |
 | `CCM_THRESHOLD_COMPLEX` | `3.5` | Score cutoff for Opus |
 | `CCM_FORCE_MODEL` | — | Force all requests to one model |

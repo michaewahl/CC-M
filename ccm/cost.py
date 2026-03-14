@@ -12,15 +12,15 @@ from pathlib import Path
 
 log = logging.getLogger("ccm.cost")
 
-# Anthropic pricing per million tokens (as of 2025-05)
+# Anthropic pricing per million tokens (as of 2026-03)
 MODEL_PRICING: dict[str, dict[str, float]] = {
-    "claude-haiku-4-5-20241022": {"input": 1.00, "output": 5.00},
-    "claude-sonnet-4-6-20250514": {"input": 3.00, "output": 15.00},
-    "claude-opus-4-6-20250514": {"input": 15.00, "output": 75.00},
+    "claude-haiku-4-5-20251001": {"input": 1.00, "output": 5.00},
+    "claude-sonnet-4-6": {"input": 3.00, "output": 15.00},
+    "claude-opus-4-6": {"input": 5.00, "output": 25.00},
 }
 
 # Fallback for unknown models — use Opus pricing (conservative)
-_DEFAULT_PRICING = {"input": 15.00, "output": 75.00}
+_DEFAULT_PRICING = {"input": 5.00, "output": 25.00}
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS request_log (
@@ -81,7 +81,7 @@ class CostTracker:
         actual = calculate_cost(model_used, input_tokens, output_tokens)
 
         # What would Opus have cost for the same tokens?
-        opus_model = "claude-opus-4-6-20250514"
+        opus_model = "claude-opus-4-6"
         opus_baseline = calculate_cost(opus_model, input_tokens, output_tokens)
 
         savings = opus_baseline - actual
