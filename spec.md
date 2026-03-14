@@ -152,7 +152,37 @@ curl http://localhost:8082/calibration
 
 This tells you: "94% of the time, Haiku gave you an equivalent answer to Opus." After you're confident, turn calibration off and save money.
 
-### 5. Override Escape Hatch
+### 5. Team Governance & Visibility (`GET /usage`)
+
+Know where your AI spend goes across your team:
+
+```bash
+curl http://localhost:8082/usage?group_by=user&days=7
+```
+
+**Identity headers** — label each request:
+```
+X-CCM-User: mike
+X-CCM-Team: platform
+```
+
+No headers? CC-M fingerprints the API key automatically (`key:a1b2c3d4`). Every request gets an identity.
+
+**Query parameters:**
+| Param | Default | Description |
+|-------|---------|-------------|
+| `user` | — | Filter by user_id |
+| `team` | — | Filter by team_id |
+| `days` | 7 | Lookback period (max 90) |
+| `group_by` | `user` | Group by: `user`, `team`, `model`, `tier`, `day` |
+
+**Additional endpoints:**
+- `GET /usage/user/{user_id}` — daily breakdown for one user
+- `GET /usage/teams` — team-level summary
+
+Response includes cost, savings, model distribution, and average complexity score per group.
+
+### 6. Override Escape Hatch
 
 Sometimes you *know* you need Opus. Two ways to force it:
 
@@ -209,6 +239,7 @@ All settings use environment variables with the `CCM_` prefix. Set them in your 
 | `CCM_THRESHOLD_MEDIUM` | 1.5 | Score cutoff for Sonnet |
 | `CCM_THRESHOLD_COMPLEX` | 3.5 | Score cutoff for Opus |
 | `CCM_FORCE_MODEL` | *(empty)* | Force all requests to one model |
+| `CCM_GOVERNANCE_ENABLED` | true | Enable /usage governance endpoints |
 | `CCM_CALIBRATION_ENABLED` | false | Turn on shadow testing |
 | `CCM_CALIBRATION_SAMPLE_RATE` | 0.2 | What % of prompts to shadow (0.2 = 20%) |
 | `CCM_CALIBRATION_MAX_PROMPTS` | 50 | Stop shadowing after this many |
@@ -223,14 +254,16 @@ CC-M_API-demo/
 │   ├── main.py                 # Web server — receives requests, routes them
 │   ├── classifier.py           # Analyzes prompts to determine complexity
 │   ├── config.py               # Settings (reads from .env file)
-│   ├── cost.py                 # Tracks spending and savings in SQLite
+│   ├── cost.py                 # Tracks spending and savings in SQLite + governance queries
+│   ├── governance.py           # /usage endpoints for team visibility
 │   ├── equivalence.py          # Compares two model responses for similarity
 │   ├── shadow.py               # Background testing against Opus
 │   └── compare.py              # CLI tool for side-by-side comparison
 ├── tests/                      # Automated tests
 │   ├── test_classifier.py      # Tests for prompt classification
-│   ├── test_cost.py            # Tests for cost calculation
-│   └── test_equivalence.py     # Tests for response comparison
+│   ├── test_cost.py            # Tests for cost calculation + governance queries
+│   ├── test_equivalence.py     # Tests for response comparison
+│   └── test_governance.py      # Tests for governance endpoints
 ├── .env.example                # Template for your settings
 ├── pyproject.toml              # Python project config and dependencies
 └── CLAUDE.md                   # Quick reference for AI assistants
@@ -249,8 +282,9 @@ CC-M_API-demo/
 5. **Model field is rewritten** — the `model` field in the request body is changed to the selected model
 6. **Request is forwarded** to `api.anthropic.com/v1/messages` with the user's API key
 7. **Response streams back** — SSE events pass through directly to the client (zero buffering)
-8. **Cost is logged** — tokens and cost recorded to SQLite
-9. **Shadow fires (if enabled)** — same prompt sent to Opus in background for comparison
+8. **Identity captured** — user/team from headers (or API key fingerprint) recorded
+9. **Cost is logged** — tokens, cost, and identity recorded to SQLite
+10. **Shadow fires (if enabled)** — same prompt sent to Opus in background for comparison
 
 ### What "Transparent Proxy" Means
 
@@ -274,12 +308,13 @@ This is intentionally simple. It doesn't judge whether an answer is "correct" �
 
 ## Roadmap
 
-### Done (v1.0 + v1.1)
+### Done (v1.0 – v1.2)
 - Smart model routing based on prompt complexity
 - Cost tracking with savings dashboard
 - Shadow calibration mode
 - Demo comparison CLI
-- Full test suite (42 tests)
+- Team governance & visibility (per-user/team spend tracking, /usage endpoints)
+- Full test suite (63 tests)
 
 ### Future (v2+)
 - **Multi-pass escalation** — start with cheap model, automatically retry with Opus if the answer seems incomplete

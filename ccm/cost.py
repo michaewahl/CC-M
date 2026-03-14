@@ -3,11 +3,12 @@ Cost tracking and savings calculation.
 
 Logs every request to SQLite with model used, tokens, actual cost,
 and what it would have cost with Opus (the baseline for savings).
+Tracks user/team identity for governance visibility.
 """
 
 import logging
 import sqlite3
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 log = logging.getLogger("ccm.cost")
@@ -37,6 +38,20 @@ CREATE TABLE IF NOT EXISTS request_log (
 );
 """
 
+# Governance columns added in v1.2
+_MIGRATION_COLUMNS = [
+    ("user_id", "TEXT NOT NULL DEFAULT 'anonymous'"),
+    ("team_id", "TEXT NOT NULL DEFAULT ''"),
+    ("api_key_fingerprint", "TEXT NOT NULL DEFAULT ''"),
+]
+
+_GOVERNANCE_INDEXES = [
+    "CREATE INDEX IF NOT EXISTS idx_user_id ON request_log(user_id)",
+    "CREATE INDEX IF NOT EXISTS idx_team_id ON request_log(team_id)",
+    "CREATE INDEX IF NOT EXISTS idx_timestamp ON request_log(timestamp)",
+    "CREATE INDEX IF NOT EXISTS idx_user_timestamp ON request_log(user_id, timestamp)",
+]
+
 
 @dataclass
 class CostRecord:
@@ -48,6 +63,9 @@ class CostRecord:
     actual_cost_usd: float
     opus_baseline_usd: float
     savings_usd: float
+    user_id: str = "anonymous"
+    team_id: str = ""
+    api_key_fingerprint: str = ""
 
 
 def calculate_cost(model: str, input_tokens: int, output_tokens: int) -> float:
@@ -66,6 +84,17 @@ class CostTracker:
         with sqlite3.connect(self._db_path) as conn:
             conn.execute("PRAGMA journal_mode=WAL")
             conn.execute(_SCHEMA)
+            self._migrate(conn)
+
+    def _migrate(self, conn: sqlite3.Connection) -> None:
+        """Add governance columns if missing (backward-compatible)."""
+        existing = {row[1] for row in conn.execute("PRAGMA table_info(request_log)").fetchall()}
+        for col_name, col_def in _MIGRATION_COLUMNS:
+            if col_name not in existing:
+                conn.execute(f"ALTER TABLE request_log ADD COLUMN {col_name} {col_def}")
+                log.info("Migrated: added column %s to request_log", col_name)
+        for idx_sql in _GOVERNANCE_INDEXES:
+            conn.execute(idx_sql)
 
     def _connect(self) -> sqlite3.Connection:
         return sqlite3.connect(self._db_path)
@@ -77,6 +106,9 @@ class CostTracker:
         complexity_score: float,
         input_tokens: int,
         output_tokens: int,
+        user_id: str = "anonymous",
+        team_id: str = "",
+        api_key_fingerprint: str = "",
     ) -> CostRecord:
         actual = calculate_cost(model_used, input_tokens, output_tokens)
 
@@ -91,10 +123,12 @@ class CostTracker:
                 """INSERT INTO request_log
                    (model_used, complexity_tier, complexity_score,
                     input_tokens, output_tokens,
-                    actual_cost_usd, opus_baseline_usd, savings_usd)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                    actual_cost_usd, opus_baseline_usd, savings_usd,
+                    user_id, team_id, api_key_fingerprint)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (model_used, complexity_tier, complexity_score,
-                 input_tokens, output_tokens, actual, opus_baseline, savings),
+                 input_tokens, output_tokens, actual, opus_baseline, savings,
+                 user_id, team_id, api_key_fingerprint),
             )
 
         record = CostRecord(
@@ -106,10 +140,94 @@ class CostTracker:
             actual_cost_usd=round(actual, 6),
             opus_baseline_usd=round(opus_baseline, 6),
             savings_usd=round(savings, 6),
+            user_id=user_id,
+            team_id=team_id,
+            api_key_fingerprint=api_key_fingerprint,
         )
-        log.info("Cost: $%.4f (saved $%.4f vs Opus) model=%s tier=%s",
-                 actual, savings, model_used, complexity_tier)
+        log.info("Cost: $%.4f (saved $%.4f vs Opus) model=%s tier=%s user=%s",
+                 actual, savings, model_used, complexity_tier, user_id)
         return record
+
+    def get_usage(
+        self,
+        user: str = "",
+        team: str = "",
+        days: int = 7,
+        group_by: str = "user",
+    ) -> dict:
+        """Query usage data with filtering and grouping for governance."""
+        with self._connect() as conn:
+            conn.row_factory = sqlite3.Row
+
+            # Build WHERE clause
+            conditions = [f"timestamp >= datetime('now', '-{min(days, 90)} days')"]
+            params: list[str] = []
+            if user:
+                conditions.append("user_id = ?")
+                params.append(user)
+            if team:
+                conditions.append("team_id = ?")
+                params.append(team)
+            where = " AND ".join(conditions)
+
+            # Totals for the period
+            totals = conn.execute(f"""
+                SELECT
+                    COUNT(*) as requests,
+                    COALESCE(SUM(actual_cost_usd), 0) as cost_usd,
+                    COALESCE(SUM(savings_usd), 0) as savings_usd
+                FROM request_log WHERE {where}
+            """, params).fetchone()
+
+            # Group-by breakdown
+            group_col = {
+                "user": "user_id",
+                "team": "team_id",
+                "model": "model_used",
+                "tier": "complexity_tier",
+                "day": "date(timestamp)",
+            }.get(group_by, "user_id")
+
+            breakdown = conn.execute(f"""
+                SELECT
+                    {group_col} as group_key,
+                    COUNT(*) as requests,
+                    COALESCE(SUM(actual_cost_usd), 0) as cost_usd,
+                    COALESCE(SUM(savings_usd), 0) as savings_usd,
+                    COALESCE(AVG(complexity_score), 0) as avg_complexity_score,
+                    SUM(CASE WHEN complexity_tier = 'SIMPLE' THEN 1 ELSE 0 END) as haiku_count,
+                    SUM(CASE WHEN complexity_tier = 'MEDIUM' THEN 1 ELSE 0 END) as sonnet_count,
+                    SUM(CASE WHEN complexity_tier = 'COMPLEX' THEN 1 ELSE 0 END) as opus_count
+                FROM request_log
+                WHERE {where}
+                GROUP BY {group_col}
+                ORDER BY cost_usd DESC
+            """, params).fetchall()
+
+        return {
+            "period": {"days": min(days, 90)},
+            "total": {
+                "requests": totals["requests"],
+                "cost_usd": round(totals["cost_usd"], 4),
+                "savings_usd": round(totals["savings_usd"], 4),
+            },
+            "group_by": group_by,
+            "breakdown": [
+                {
+                    group_by: row["group_key"],
+                    "requests": row["requests"],
+                    "cost_usd": round(row["cost_usd"], 4),
+                    "savings_usd": round(row["savings_usd"], 4),
+                    "avg_complexity_score": round(row["avg_complexity_score"], 2),
+                    "model_distribution": {
+                        "haiku": row["haiku_count"],
+                        "sonnet": row["sonnet_count"],
+                        "opus": row["opus_count"],
+                    },
+                }
+                for row in breakdown
+            ],
+        }
 
     def get_stats(self) -> dict:
         with self._connect() as conn:

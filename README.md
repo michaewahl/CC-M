@@ -89,7 +89,43 @@ Scores are additive. More signals = higher score = more capable model.
 | `/v1/messages` | POST | Anthropic API proxy (transparent) |
 | `/health` | GET | Health check |
 | `/stats` | GET | Cost savings dashboard |
+| `/usage` | GET | Team governance — who's spending what |
+| `/usage/user/{id}` | GET | Single user daily breakdown |
+| `/usage/teams` | GET | Team-level summary |
 | `/calibration` | GET | Shadow calibration report |
+
+### `/usage` — Team Governance
+
+See who's spending what across your team:
+
+```bash
+curl http://localhost:8082/usage?group_by=user&days=7
+```
+```json
+{
+  "period": {"days": 7},
+  "total": {"requests": 847, "cost_usd": 12.34, "savings_usd": 31.56},
+  "group_by": "user",
+  "breakdown": [
+    {
+      "user": "mike",
+      "requests": 312,
+      "cost_usd": 5.67,
+      "savings_usd": 14.23,
+      "avg_complexity_score": 2.1,
+      "model_distribution": {"haiku": 180, "sonnet": 102, "opus": 30}
+    }
+  ]
+}
+```
+
+**Identity headers** — label requests with user/team:
+```bash
+curl -H "X-CCM-User: mike" -H "X-CCM-Team: platform" \
+  http://localhost:8082/v1/messages ...
+```
+
+No headers? CC-M fingerprints the API key automatically (`key:a1b2c3d4`).
 
 ### `/stats` — See Your Savings
 
@@ -172,6 +208,7 @@ All env vars use the `CCM_` prefix. Set in `.env`:
 | `CCM_THRESHOLD_MEDIUM` | `1.5` | Score cutoff for Sonnet |
 | `CCM_THRESHOLD_COMPLEX` | `3.5` | Score cutoff for Opus |
 | `CCM_FORCE_MODEL` | — | Force all requests to one model |
+| `CCM_GOVERNANCE_ENABLED` | `true` | Enable /usage governance endpoints |
 | `CCM_CALIBRATION_ENABLED` | `false` | Enable shadow testing |
 | `CCM_CALIBRATION_SAMPLE_RATE` | `0.2` | Fraction of prompts to shadow |
 | `CCM_CALIBRATION_MAX_PROMPTS` | `50` | Stop after N shadows |
@@ -183,14 +220,16 @@ ccm/
 ├── main.py           # FastAPI proxy, SSE streaming, shadow wiring
 ├── classifier.py     # Prompt complexity scoring
 ├── config.py         # Settings (pydantic-settings)
-├── cost.py           # SQLite cost tracking + /stats
+├── cost.py           # SQLite cost tracking + /stats + governance queries
+├── governance.py     # /usage endpoints for team visibility
 ├── equivalence.py    # Response comparison logic
 ├── shadow.py         # Background shadow calibration
 └── compare.py        # CLI demo tool
 tests/
 ├── test_classifier.py
 ├── test_cost.py
-└── test_equivalence.py
+├── test_equivalence.py
+└── test_governance.py
 Dockerfile
 docker-compose.yml
 ```
@@ -202,7 +241,7 @@ source .venv/bin/activate
 pytest tests/ -v
 ```
 
-42 tests covering classification scoring, cost calculation, and equivalence comparison.
+63 tests covering classification scoring, cost calculation, equivalence comparison, and governance endpoints.
 
 ## CC-RLM Integration
 

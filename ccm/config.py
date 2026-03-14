@@ -29,6 +29,9 @@ class CCMSettings(BaseSettings):
     # Timeout for Anthropic API calls (seconds)
     request_timeout: float = 120.0
 
+    # Governance & visibility
+    governance_enabled: bool = True
+
     # Shadow calibration mode
     calibration_enabled: bool = False
     calibration_sample_rate: float = 0.2   # shadow 1 in 5 prompts

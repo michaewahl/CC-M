@@ -16,12 +16,14 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from ccm.classifier import classify
 from ccm.config import settings
 from ccm.cost import CostTracker
+from ccm.governance import router as governance_router
 from ccm.shadow import ShadowRunner
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("ccm")
 
 app = FastAPI(title="CC-M — Claude Model Router")
+app.include_router(governance_router)
 
 _client: httpx.AsyncClient | None = None
 _tracker: CostTracker | None = None
@@ -117,8 +119,15 @@ async def proxy_messages(request: Request):
     original_model = body.get("model", "")
     body["model"] = model
 
-    # --- Forward to Anthropic ---
+    # --- Identity (governance) ---
     api_key = request.headers.get("x-api-key", "") or settings.anthropic_api_key
+    api_key_fingerprint = f"key:{api_key[-8:]}" if len(api_key) >= 8 else ""
+    user_id = request.headers.get("x-ccm-user", "")
+    team_id = request.headers.get("x-ccm-team", "")
+    if not user_id:
+        user_id = api_key_fingerprint or "anonymous"
+
+    # --- Forward to Anthropic ---
     if not api_key:
         return JSONResponse(
             status_code=401,
@@ -138,13 +147,15 @@ async def proxy_messages(request: Request):
     target = f"{settings.anthropic_base_url}/v1/messages"
     is_streaming = body.get("stream", False)
 
+    identity = {"user_id": user_id, "team_id": team_id, "api_key_fingerprint": api_key_fingerprint}
+
     if is_streaming:
         return await _stream_response(
-            target, headers, body, model, tier_label, score, api_key,
+            target, headers, body, model, tier_label, score, api_key, identity,
         )
     else:
         return await _sync_response(
-            target, headers, body, model, tier_label, score, api_key,
+            target, headers, body, model, tier_label, score, api_key, identity,
         )
 
 
@@ -156,6 +167,7 @@ async def _stream_response(
     tier: str,
     score: float,
     api_key: str,
+    identity: dict | None = None,
 ) -> StreamingResponse:
     """SSE passthrough with token counting from stream metadata."""
 
@@ -195,12 +207,16 @@ async def _stream_response(
 
         # Stream complete — log cost
         if input_tokens or output_tokens:
+            _id = identity or {}
             _tracker.log_request(
                 model_used=model,
                 complexity_tier=tier,
                 complexity_score=score,
                 input_tokens=input_tokens,
                 output_tokens=output_tokens,
+                user_id=_id.get("user_id", "anonymous"),
+                team_id=_id.get("team_id", ""),
+                api_key_fingerprint=_id.get("api_key_fingerprint", ""),
             )
 
         # Shadow calibration (fire-and-forget in background)
@@ -212,10 +228,13 @@ async def _stream_response(
                 )
             )
 
+    _id = identity or {}
     response_headers = {
         "X-CCM-Model-Used": model,
         "X-CCM-Complexity-Tier": tier,
         "X-CCM-Complexity-Score": str(score),
+        "X-CCM-User": _id.get("user_id", ""),
+        "X-CCM-Team": _id.get("team_id", ""),
     }
 
     return StreamingResponse(
@@ -233,6 +252,7 @@ async def _sync_response(
     tier: str,
     score: float,
     api_key: str,
+    identity: dict | None = None,
 ) -> JSONResponse:
     """Non-streaming: forward, log cost, optionally shadow, return."""
     resp = await _client.post(target, json=body, headers=headers, timeout=settings.request_timeout)
@@ -243,12 +263,16 @@ async def _sync_response(
     input_tokens = usage.get("input_tokens", 0)
     output_tokens = usage.get("output_tokens", 0)
 
+    _id = identity or {}
     cost_record = _tracker.log_request(
         model_used=model,
         complexity_tier=tier,
         complexity_score=score,
         input_tokens=input_tokens,
         output_tokens=output_tokens,
+        user_id=_id.get("user_id", "anonymous"),
+        team_id=_id.get("team_id", ""),
+        api_key_fingerprint=_id.get("api_key_fingerprint", ""),
     )
 
     # Shadow calibration (fire-and-forget in background)
@@ -271,6 +295,8 @@ async def _sync_response(
         "X-CCM-Complexity-Score": str(score),
         "X-CCM-Cost-USD": str(cost_record.actual_cost_usd),
         "X-CCM-Savings-USD": str(cost_record.savings_usd),
+        "X-CCM-User": _id.get("user_id", ""),
+        "X-CCM-Team": _id.get("team_id", ""),
     }
 
     return JSONResponse(
