@@ -1,0 +1,30 @@
+# CC-M — Docker Compose
+#
+# Quick start:
+#   cp .env.example .env
+#   # Edit .env → add your Anthropic API key
+#   docker compose up -d
+#
+# Then point API calls at http://localhost:8082/v1/messages
+
+services:
+
+  ccm:
+    build: .
+    ports:
+      - "${CCM_PORT:-8082}:8082"
+    env_file:
+      - .env
+    volumes:
+      # Persistent cost tracking database
+      - ccm_data:/root/.cc-m
+    environment:
+      - CCM_STORE_PATH=/root/.cc-m/cost.db
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8082/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+volumes:
+  ccm_data:

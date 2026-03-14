@@ -58,7 +58,15 @@ async def shutdown():
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "service": "cc-m"}
+    stats = _tracker.get_stats()
+    return {
+        "status": "ok",
+        "service": "cc-m",
+        "total_requests": stats.get("total_requests", 0),
+        "model_distribution": stats.get("model_distribution", {}),
+        "calibration_enabled": settings.calibration_enabled,
+        "force_model": settings.force_model or None,
+    }
 
 
 @app.get("/stats")

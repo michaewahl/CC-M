@@ -20,10 +20,20 @@ Opus costs **15x more** than Haiku. But "What does this function do?" gets the s
 
 ## Quick Start
 
+### Docker (recommended)
+
 ```bash
 git clone https://github.com/michaelwahl/CC-M.git && cd CC-M
+cp .env.example .env
+# Edit .env → add your Anthropic API key (CCM_ANTHROPIC_API_KEY=sk-ant-...)
 
-# Setup
+docker compose up -d
+```
+
+### Manual
+
+```bash
+git clone https://github.com/michaelwahl/CC-M.git && cd CC-M
 cp .env.example .env
 # Edit .env → add your Anthropic API key (CCM_ANTHROPIC_API_KEY=sk-ant-...)
 
@@ -181,6 +191,8 @@ tests/
 ├── test_classifier.py
 ├── test_cost.py
 └── test_equivalence.py
+Dockerfile
+docker-compose.yml
 ```
 
 ## Tests
