@@ -49,6 +49,8 @@ python -m ccm.compare "Explain what a Python decorator is"
 
 - Pure SSE passthrough — zero response buffering, no added latency
 - No multi-pass escalation — single-shot routing only
-- Override via `X-CCM-Model-Override` header or `CCM_FORCE_MODEL` env var
+- Override via `X-CCM-Model-Override` header (validated against known model IDs) or `CCM_FORCE_MODEL` env var
 - Identity via `X-CCM-User` and `X-CCM-Team` headers (fallback: API key fingerprint)
+- Admin auth: set `CCM_ADMIN_TOKEN` to require `Authorization: Bearer <token>` for /stats, /calibration, /usage endpoints
+- Governance router gated by `CCM_GOVERNANCE_ENABLED` (default: true)
 - Shadow calibration is opt-in (`CCM_CALIBRATION_ENABLED=true`), sampled (20% default), and capped

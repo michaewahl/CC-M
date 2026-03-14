@@ -5,9 +5,11 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
+from fastapi import Depends, FastAPI
 from fastapi.testclient import TestClient
 
 from ccm.cost import CostTracker
+from ccm.main import require_admin
 
 
 @pytest.fixture
@@ -23,11 +25,25 @@ def tracker(tmp_path):
 
 @pytest.fixture
 def client(tracker):
-    with patch("ccm.governance._get_tracker", return_value=tracker):
+    """Client with admin_token unset (open access / dev mode)."""
+    with patch("ccm.governance._get_tracker", return_value=tracker), \
+         patch("ccm.main.settings") as mock_settings:
+        mock_settings.admin_token = ""
         from ccm.governance import router
-        from fastapi import FastAPI
         app = FastAPI()
-        app.include_router(router)
+        app.include_router(router, dependencies=[Depends(require_admin)])
+        yield TestClient(app)
+
+
+@pytest.fixture
+def secured_client(tracker):
+    """Client with admin_token set — requires Authorization header."""
+    with patch("ccm.governance._get_tracker", return_value=tracker), \
+         patch("ccm.main.settings") as mock_settings:
+        mock_settings.admin_token = "test-secret"
+        from ccm.governance import router
+        app = FastAPI()
+        app.include_router(router, dependencies=[Depends(require_admin)])
         yield TestClient(app)
 
 
@@ -105,3 +121,32 @@ class TestUsageByTeams:
         data = resp.json()
         assert data["group_by"] == "team"
         assert len(data["breakdown"]) == 2
+
+
+class TestAdminAuth:
+    """H1 fix: endpoints require admin token when configured."""
+
+    def test_no_token_required_when_unset(self, client):
+        """Dev mode: admin_token="" means open access."""
+        resp = client.get("/usage")
+        assert resp.status_code == 200
+
+    def test_rejects_missing_token(self, secured_client):
+        resp = secured_client.get("/usage")
+        assert resp.status_code == 401
+
+    def test_rejects_wrong_token(self, secured_client):
+        resp = secured_client.get("/usage", headers={"Authorization": "Bearer wrong"})
+        assert resp.status_code == 401
+
+    def test_accepts_valid_token(self, secured_client):
+        resp = secured_client.get("/usage", headers={"Authorization": "Bearer test-secret"})
+        assert resp.status_code == 200
+
+    def test_teams_requires_auth(self, secured_client):
+        resp = secured_client.get("/usage/teams")
+        assert resp.status_code == 401
+
+    def test_user_endpoint_requires_auth(self, secured_client):
+        resp = secured_client.get("/usage/user/alice")
+        assert resp.status_code == 401

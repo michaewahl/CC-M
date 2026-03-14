@@ -31,6 +31,7 @@ class CCMSettings(BaseSettings):
 
     # Governance & visibility
     governance_enabled: bool = True
+    admin_token: str = ""  # required for /stats, /calibration, /usage endpoints
 
     # Shadow calibration mode
     calibration_enabled: bool = False

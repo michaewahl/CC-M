@@ -10,20 +10,33 @@ import json
 import logging
 
 import httpx
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, Depends, HTTPException
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from ccm.classifier import classify
 from ccm.config import settings
-from ccm.cost import CostTracker
+from ccm.cost import CostTracker, MODEL_PRICING
 from ccm.governance import router as governance_router
 from ccm.shadow import ShadowRunner
+
+# Valid model IDs for override validation (H2 fix)
+_VALID_MODELS = set(MODEL_PRICING.keys())
+
+
+async def require_admin(request: Request) -> None:
+    """Dependency: reject requests without a valid admin token."""
+    if not settings.admin_token:
+        return  # no token configured → open access (dev mode)
+    auth = request.headers.get("authorization", "")
+    if auth != f"Bearer {settings.admin_token}":
+        raise HTTPException(status_code= 401, detail="Admin token required")
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("ccm")
 
 app = FastAPI(title="CC-M — Claude Model Router")
-app.include_router(governance_router)
+if settings.governance_enabled:
+    app.include_router(governance_router, dependencies=[Depends(require_admin)])
 
 _client: httpx.AsyncClient | None = None
 _tracker: CostTracker | None = None
@@ -71,12 +84,12 @@ async def health():
     }
 
 
-@app.get("/stats")
+@app.get("/stats", dependencies=[Depends(require_admin)])
 async def stats():
     return _tracker.get_stats()
 
 
-@app.get("/calibration")
+@app.get("/calibration", dependencies=[Depends(require_admin)])
 async def calibration():
     return _shadow.get_calibration_report()
 
@@ -90,6 +103,11 @@ async def proxy_messages(request: Request):
     # Priority: header override > env force > classifier
     override = request.headers.get("x-ccm-model-override", "")
     if override:
+        if override not in _VALID_MODELS:
+            return JSONResponse(
+                status_code=400,
+                content={"error": f"Invalid model override '{override}'. Valid: {sorted(_VALID_MODELS)}"},
+            )
         model = override
         tier_label = "OVERRIDE"
         score = 0.0
