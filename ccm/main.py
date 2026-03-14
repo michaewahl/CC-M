@@ -18,6 +18,7 @@ from ccm.classifier import classify
 from ccm.config import settings
 from ccm.cost import CostTracker, MODEL_PRICING
 from ccm.governance import router as governance_router
+from ccm.plugins import discover_plugins, get_plugins, PluginContext
 from ccm.shadow import ShadowRunner
 
 # Valid model IDs for override validation (H2 fix)
@@ -60,6 +61,20 @@ async def lifespan(app: FastAPI):
     if settings.calibration_enabled:
         log.info("  Calibration: ON (sample_rate=%.0f%%, max=%d)",
                  settings.calibration_sample_rate * 100, settings.calibration_max_prompts)
+
+    # Load plugins (e.g., ccm-enterprise)
+    ctx = PluginContext(settings=settings, require_admin=require_admin)
+    loaded_plugins = discover_plugins()
+    for plugin in loaded_plugins:
+        try:
+            plugin.register(app, ctx)
+            log.info("Plugin registered: %s", plugin.info().name)
+        except Exception as exc:
+            log.error("Plugin registration failed (%s): %s", plugin.info().name, exc)
+
+    if not loaded_plugins:
+        log.info("  Edition: community (upgrade: https://buy.stripe.com/eVq7sL3Ry9feaby6x07IY05)")
+
     yield
     if _client:
         await _client.aclose()
@@ -80,6 +95,30 @@ async def health():
         "model_distribution": stats.get("model_distribution", {}),
         "calibration_enabled": settings.calibration_enabled,
         "force_model": settings.force_model or None,
+    }
+
+
+@app.get("/license")
+async def license_info():
+    """Current license status and loaded plugins."""
+    plugins = get_plugins()
+    enterprise = [p for p in plugins if p.info().tier == "enterprise"]
+    if enterprise:
+        info = enterprise[0].info()
+        return {
+            "edition": "enterprise",
+            "plugin": info.name,
+            "version": info.version,
+            "features": info.features,
+            "license_configured": bool(settings.license_key),
+        }
+    return {
+        "edition": "community",
+        "plugin": None,
+        "version": None,
+        "features": [],
+        "license_configured": False,
+        "upgrade": "https://buy.stripe.com/eVq7sL3Ry9feaby6x07IY05",
     }
 
 

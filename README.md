@@ -88,6 +88,7 @@ Scores are additive. More signals = higher score = more capable model.
 |----------|--------|-------------|
 | `/v1/messages` | POST | Anthropic API proxy (transparent) |
 | `/health` | GET | Health check |
+| `/license` | GET | License status (community vs enterprise) |
 | `/stats` | GET | Cost savings dashboard |
 | `/usage` | GET | Team governance — who's spending what |
 | `/usage/user/{id}` | GET | Single user daily breakdown |
@@ -212,6 +213,7 @@ All env vars use the `CCM_` prefix. Set in `.env`:
 | `CCM_FORCE_MODEL` | — | Force all requests to one model |
 | `CCM_GOVERNANCE_ENABLED` | `true` | Enable /usage governance endpoints |
 | `CCM_ADMIN_TOKEN` | — | Protect admin endpoints (`Bearer` auth) |
+| `CCM_LICENSE_KEY` | — | Enterprise license key (requires `ccm-enterprise`) |
 | `CCM_CALIBRATION_ENABLED` | `false` | Enable shadow testing |
 | `CCM_CALIBRATION_SAMPLE_RATE` | `0.2` | Fraction of prompts to shadow |
 | `CCM_CALIBRATION_MAX_PROMPTS` | `50` | Stop after N shadows |
@@ -220,11 +222,12 @@ All env vars use the `CCM_` prefix. Set in `.env`:
 
 ```
 ccm/
-├── main.py           # FastAPI proxy, SSE streaming, shadow wiring
+├── main.py           # FastAPI proxy, SSE streaming, plugin wiring
 ├── classifier.py     # Prompt complexity scoring
 ├── config.py         # Settings (pydantic-settings)
 ├── cost.py           # SQLite cost tracking + /stats + governance queries
 ├── governance.py     # /usage endpoints for team visibility
+├── plugins.py        # Plugin protocol + discovery (enterprise extension point)
 ├── equivalence.py    # Response comparison logic
 ├── shadow.py         # Background shadow calibration
 └── compare.py        # CLI demo tool
@@ -233,6 +236,7 @@ tests/
 ├── test_cost.py
 ├── test_equivalence.py
 ├── test_governance.py
+├── test_plugins.py
 └── test_security.py
 Dockerfile
 docker-compose.yml
@@ -264,6 +268,33 @@ CCR_ANTHROPIC_FALLBACK_URL=http://localhost:8082
 ```
 
 Now CC-RLM's Anthropic fallback gets model-tier optimization for free: simple prompts go to Haiku, complex ones to Opus, with full cost tracking.
+
+## Enterprise
+
+CC-M supports an optional enterprise plugin for premium features (policy engine, advanced analytics, budget alerts, audit trail).
+
+**Get a license:** https://buy.stripe.com/eVq7sL3Ry9feaby6x07IY05
+
+Then install the enterprise package and add your license key:
+
+```bash
+pip install ccm-enterprise
+```
+
+```env
+CCM_LICENSE_KEY=lic_live_xxx
+```
+
+Check your edition:
+
+```bash
+curl http://localhost:8082/license
+```
+```json
+{"edition": "enterprise", "features": ["policy", "analytics", "alerts", "audit"]}
+```
+
+Without the enterprise package, CC-M runs in community mode with all core features (routing, cost tracking, governance, calibration) fully available.
 
 ## Requirements
 

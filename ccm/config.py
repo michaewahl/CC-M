@@ -33,6 +33,9 @@ class CCMSettings(BaseSettings):
     governance_enabled: bool = True
     admin_token: str = ""  # required for /stats, /calibration, /usage endpoints
 
+    # Enterprise license
+    license_key: str = ""  # passed to enterprise plugin for validation
+
     # Shadow calibration mode
     calibration_enabled: bool = False
     calibration_sample_rate: float = 0.2   # shadow 1 in 5 prompts
