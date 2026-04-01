@@ -175,6 +175,38 @@ async def proxy_messages(request: Request):
     original_model = body.get("model", "")
     body["model"] = model
 
+    # --- Swarm governance ---
+    _swarm_watch = {n.strip().lower() for n in settings.swarm_tool_names.split(",") if n.strip()}
+    request_tools = body.get("tools") or []
+    swarm_tools_detected = [
+        t.get("name", "") for t in request_tools
+        if isinstance(t, dict) and t.get("name", "").lower() in _swarm_watch
+    ]
+    is_swarm = bool(swarm_tools_detected)
+
+    if is_swarm:
+        log.warning("Swarm detected: tools=%s user=%s action=%s",
+                    swarm_tools_detected, request.headers.get("x-ccm-user", "anonymous"),
+                    settings.swarm_action)
+
+        if settings.swarm_action == "block":
+            approved = request.headers.get(settings.swarm_require_header, "").lower()
+            if approved != "true":
+                return JSONResponse(
+                    status_code=403,
+                    content={
+                        "error": "swarm_approval_required",
+                        "message": "Sub-agent spawning detected. Pass "
+                                   f"'{settings.swarm_require_header}: true' to proceed.",
+                        "tools_detected": swarm_tools_detected,
+                    },
+                )
+        elif settings.swarm_action == "cap":
+            current_max = body.get("max_tokens", settings.swarm_token_cap + 1)
+            if current_max > settings.swarm_token_cap:
+                body["max_tokens"] = settings.swarm_token_cap
+                log.info("Swarm token cap applied: max_tokens capped at %d", settings.swarm_token_cap)
+
     # --- Identity (governance) ---
     api_key = request.headers.get("x-api-key", "") or settings.anthropic_api_key
     api_key_fingerprint = f"key:{api_key[-8:]}" if len(api_key) >= 8 else ""
@@ -237,14 +269,15 @@ async def proxy_messages(request: Request):
     is_streaming = body.get("stream", False)
 
     identity = {"user_id": user_id, "team_id": team_id, "api_key_fingerprint": api_key_fingerprint}
+    swarm_meta = {"is_swarm": is_swarm, "swarm_tools": swarm_tools_detected}
 
     if is_streaming:
         return await _stream_response(
-            target, headers, body, model, tier_label, score, api_key, identity,
+            target, headers, body, model, tier_label, score, api_key, identity, swarm_meta,
         )
     else:
         return await _sync_response(
-            target, headers, body, model, tier_label, score, api_key, identity,
+            target, headers, body, model, tier_label, score, api_key, identity, swarm_meta,
         )
 
 
@@ -257,6 +290,7 @@ async def _stream_response(
     score: float,
     api_key: str,
     identity: dict | None = None,
+    swarm_meta: dict | None = None,
 ) -> StreamingResponse:
     """SSE passthrough with token counting from stream metadata."""
 
@@ -318,12 +352,14 @@ async def _stream_response(
             )
 
     _id = identity or {}
+    _sw = swarm_meta or {}
     response_headers = {
         "X-CCM-Model-Used": model,
         "X-CCM-Complexity-Tier": tier,
         "X-CCM-Complexity-Score": str(score),
         "X-CCM-User": _id.get("user_id", ""),
         "X-CCM-Team": _id.get("team_id", ""),
+        "X-CCM-Swarm-Detected": str(_sw.get("is_swarm", False)).lower(),
     }
 
     return StreamingResponse(
@@ -342,6 +378,7 @@ async def _sync_response(
     score: float,
     api_key: str,
     identity: dict | None = None,
+    swarm_meta: dict | None = None,
 ) -> JSONResponse:
     """Non-streaming: forward, log cost, optionally shadow, return."""
     resp = await _client.post(target, json=body, headers=headers, timeout=settings.request_timeout)
@@ -378,6 +415,7 @@ async def _sync_response(
                 )
             )
 
+    _sw = swarm_meta or {}
     response_headers = {
         "X-CCM-Model-Used": model,
         "X-CCM-Complexity-Tier": tier,
@@ -386,6 +424,7 @@ async def _sync_response(
         "X-CCM-Savings-USD": str(cost_record.savings_usd),
         "X-CCM-User": _id.get("user_id", ""),
         "X-CCM-Team": _id.get("team_id", ""),
+        "X-CCM-Swarm-Detected": str(_sw.get("is_swarm", False)).lower(),
     }
 
     return JSONResponse(

@@ -27,6 +27,13 @@ class CCMSettings(BaseSettings):
     budget_user_daily_usd: float = 0.0   # per-user daily cap
     budget_team_daily_usd: float = 0.0   # per-team daily cap
 
+    # Swarm governance — detect and control sub-agent spawning
+    # action: "log" (default), "cap" (limit max_tokens), "block" (require approval header)
+    swarm_action: str = "log"
+    swarm_tool_names: str = "agent,computer_use"  # comma-separated tool names to watch
+    swarm_token_cap: int = 4096                   # max_tokens cap when action=cap
+    swarm_require_header: str = "x-ccm-swarm-approved"  # header required when action=block
+
     # Logging
     log_classifications: bool = True
 
