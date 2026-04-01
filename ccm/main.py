@@ -183,6 +183,39 @@ async def proxy_messages(request: Request):
     if not user_id:
         user_id = api_key_fingerprint or "anonymous"
 
+    # --- Spend enforcement ---
+    if settings.budget_user_daily_usd > 0:
+        spent = _tracker.get_daily_spend(user_id=user_id)
+        if spent >= settings.budget_user_daily_usd:
+            log.warning("Budget exceeded: user=%s spent=$%.4f limit=$%.4f",
+                        user_id, spent, settings.budget_user_daily_usd)
+            return JSONResponse(
+                status_code=429,
+                content={
+                    "error": "budget_exceeded",
+                    "message": f"Daily spend limit reached for user '{user_id}'. "
+                               f"Spent: ${spent:.4f}, limit: ${settings.budget_user_daily_usd:.4f}",
+                    "spent_usd": round(spent, 4),
+                    "limit_usd": settings.budget_user_daily_usd,
+                },
+            )
+
+    if settings.budget_team_daily_usd > 0 and team_id:
+        spent = _tracker.get_daily_spend(team_id=team_id)
+        if spent >= settings.budget_team_daily_usd:
+            log.warning("Budget exceeded: team=%s spent=$%.4f limit=$%.4f",
+                        team_id, spent, settings.budget_team_daily_usd)
+            return JSONResponse(
+                status_code=429,
+                content={
+                    "error": "budget_exceeded",
+                    "message": f"Daily spend limit reached for team '{team_id}'. "
+                               f"Spent: ${spent:.4f}, limit: ${settings.budget_team_daily_usd:.4f}",
+                    "spent_usd": round(spent, 4),
+                    "limit_usd": settings.budget_team_daily_usd,
+                },
+            )
+
     # --- Forward to Anthropic ---
     if not api_key:
         return JSONResponse(

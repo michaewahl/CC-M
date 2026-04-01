@@ -148,6 +148,25 @@ class CostTracker:
                  actual, savings, model_used, complexity_tier, user_id)
         return record
 
+    def get_daily_spend(self, user_id: str = "", team_id: str = "") -> float:
+        """Return total spend today (UTC) for a user or team."""
+        with self._connect() as conn:
+            if user_id:
+                row = conn.execute("""
+                    SELECT COALESCE(SUM(actual_cost_usd), 0)
+                    FROM request_log
+                    WHERE user_id = ? AND date(timestamp) = date('now')
+                """, (user_id,)).fetchone()
+            elif team_id:
+                row = conn.execute("""
+                    SELECT COALESCE(SUM(actual_cost_usd), 0)
+                    FROM request_log
+                    WHERE team_id = ? AND date(timestamp) = date('now')
+                """, (team_id,)).fetchone()
+            else:
+                return 0.0
+        return row[0] if row else 0.0
+
     def get_usage(
         self,
         user: str = "",

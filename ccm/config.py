@@ -23,6 +23,10 @@ class CCMSettings(BaseSettings):
     # Cost tracking
     store_path: str = "~/.cc-m/cost.db"
 
+    # Spend enforcement — hard daily budget caps (0 = disabled)
+    budget_user_daily_usd: float = 0.0   # per-user daily cap
+    budget_team_daily_usd: float = 0.0   # per-team daily cap
+
     # Logging
     log_classifications: bool = True
 
