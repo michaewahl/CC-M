@@ -137,8 +137,19 @@ async def proxy_messages(request: Request):
     body_bytes = await request.body()
     body = json.loads(body_bytes)
 
+    # --- Tool-result detection ---
+    # Check if any user message contains tool_result blocks (follow-up after tool execution)
+    _messages = body.get("messages", [])
+    has_tool_result = any(
+        isinstance(msg.get("content"), list) and
+        any(isinstance(b, dict) and b.get("type") == "tool_result"
+            for b in msg.get("content", []))
+        for msg in _messages
+        if msg.get("role") == "user"
+    )
+
     # --- Determine model ---
-    # Priority: header override > env force > classifier
+    # Priority: header override > env force > tool_result downgrade > classifier
     override = request.headers.get("x-ccm-model-override", "")
     if override:
         if override not in _VALID_MODELS:
@@ -154,6 +165,11 @@ async def proxy_messages(request: Request):
         model = settings.force_model
         tier_label = "FORCED"
         score = 0.0
+    elif has_tool_result and settings.tool_result_downgrade:
+        model = settings.model_simple
+        tier_label = "TOOL_RESULT"
+        score = 0.0
+        log.info("Tool result follow-up → downgraded to %s (skipping classifier)", model)
     else:
         messages = body.get("messages", [])
         tools = body.get("tools")
@@ -269,7 +285,7 @@ async def proxy_messages(request: Request):
     is_streaming = body.get("stream", False)
 
     identity = {"user_id": user_id, "team_id": team_id, "api_key_fingerprint": api_key_fingerprint}
-    swarm_meta = {"is_swarm": is_swarm, "swarm_tools": swarm_tools_detected}
+    swarm_meta = {"is_swarm": is_swarm, "swarm_tools": swarm_tools_detected, "tool_result": has_tool_result}
 
     if is_streaming:
         return await _stream_response(
@@ -298,6 +314,8 @@ async def _stream_response(
         input_tokens = 0
         output_tokens = 0
         content_parts: list[str] = []
+        tool_calls: list[dict] = []
+        current_tool: dict | None = None
 
         async with _client.stream(
             "POST", target, json=body, headers=headers,
@@ -307,7 +325,7 @@ async def _stream_response(
                 # Pass through every line as-is
                 yield f"{line}\n\n"
 
-                # Extract token counts and content from stream events
+                # Extract token counts, content, and tool calls from stream events
                 if line.startswith("data:") and "[DONE]" not in line:
                     try:
                         data = json.loads(line[5:].strip())
@@ -317,10 +335,25 @@ async def _stream_response(
                             usage = data.get("message", {}).get("usage", {})
                             input_tokens = usage.get("input_tokens", 0)
 
+                        elif event_type == "content_block_start":
+                            block = data.get("content_block", {})
+                            if block.get("type") == "tool_use":
+                                current_tool = {"name": block.get("name", ""), "input_parts": []}
+
                         elif event_type == "content_block_delta":
                             delta = data.get("delta", {})
                             if delta.get("type") == "text_delta":
                                 content_parts.append(delta.get("text", ""))
+                            elif delta.get("type") == "input_json_delta" and current_tool is not None:
+                                current_tool["input_parts"].append(delta.get("partial_json", ""))
+
+                        elif event_type == "content_block_stop":
+                            if current_tool is not None:
+                                tool_calls.append({
+                                    "name": current_tool["name"],
+                                    "input": "".join(current_tool["input_parts"]),
+                                })
+                                current_tool = None
 
                         elif event_type == "message_delta":
                             usage = data.get("usage", {})
@@ -342,6 +375,18 @@ async def _stream_response(
                 api_key_fingerprint=_id.get("api_key_fingerprint", ""),
             )
 
+        # Log tool calls detected in stream
+        if tool_calls and settings.tool_log_calls:
+            _id = identity or {}
+            for tc in tool_calls:
+                try:
+                    input_data = json.loads(tc["input"]) if tc["input"] else {}
+                    input_summary = list(input_data.keys())
+                except (json.JSONDecodeError, ValueError):
+                    input_summary = [f"raw:{len(tc['input'])}chars"]
+                log.info("Tool call: tool=%s inputs=%s user=%s model=%s",
+                         tc["name"], input_summary, _id.get("user_id", "anonymous"), model)
+
         # Shadow calibration (fire-and-forget in background)
         if content_parts and _shadow.should_shadow(tier):
             asyncio.create_task(
@@ -360,6 +405,7 @@ async def _stream_response(
         "X-CCM-User": _id.get("user_id", ""),
         "X-CCM-Team": _id.get("team_id", ""),
         "X-CCM-Swarm-Detected": str(_sw.get("is_swarm", False)).lower(),
+        "X-CCM-Tool-Result-Request": str(has_tool_result).lower(),
     }
 
     return StreamingResponse(
@@ -416,6 +462,18 @@ async def _sync_response(
             )
 
     _sw = swarm_meta or {}
+
+    # Log tool calls from sync response
+    tool_calls_sync = [
+        b for b in result.get("content", [])
+        if isinstance(b, dict) and b.get("type") == "tool_use"
+    ]
+    if tool_calls_sync and settings.tool_log_calls:
+        for tc in tool_calls_sync:
+            log.info("Tool call: tool=%s inputs=%s user=%s model=%s",
+                     tc.get("name"), list((tc.get("input") or {}).keys()),
+                     _id.get("user_id", "anonymous"), model)
+
     response_headers = {
         "X-CCM-Model-Used": model,
         "X-CCM-Complexity-Tier": tier,
@@ -425,6 +483,8 @@ async def _sync_response(
         "X-CCM-User": _id.get("user_id", ""),
         "X-CCM-Team": _id.get("team_id", ""),
         "X-CCM-Swarm-Detected": str(_sw.get("is_swarm", False)).lower(),
+        "X-CCM-Tool-Calls": str(len(tool_calls_sync)),
+        "X-CCM-Tool-Result-Request": str(_sw.get("tool_result", False)).lower(),
     }
 
     return JSONResponse(

@@ -27,6 +27,10 @@ class CCMSettings(BaseSettings):
     budget_user_daily_usd: float = 0.0   # per-user daily cap
     budget_team_daily_usd: float = 0.0   # per-team daily cap
 
+    # Tool-use interception
+    tool_result_downgrade: bool = True  # route tool_result follow-ups to cheapest model
+    tool_log_calls: bool = True         # log tool calls detected in SSE response streams
+
     # Swarm governance — detect and control sub-agent spawning
     # action: "log" (default), "cap" (limit max_tokens), "block" (require approval header)
     swarm_action: str = "log"
