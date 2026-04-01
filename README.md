@@ -185,6 +185,69 @@ curl http://localhost:8082/calibration
 
 Calibration stops automatically after 50 shadows (~$3-5 in Opus costs).
 
+## Agentic AI Governance
+
+CC-M acts as a server-side governor for agentic Claude workflows — sitting outside the agent where it can intercept and enforce before API calls are made.
+
+### Phase 1 — Spend Enforcement
+
+Hard daily budget caps per user or team. Requests are **blocked before hitting Anthropic** when the limit is exceeded:
+
+```env
+CCM_BUDGET_USER_DAILY_USD=5.00   # block any user over $5/day
+CCM_BUDGET_TEAM_DAILY_USD=50.00  # block any team over $50/day
+```
+
+Over-budget requests get a `429` with clear context:
+```json
+{
+  "error": "budget_exceeded",
+  "message": "Daily spend limit reached for user 'alice'. Spent: $5.12, limit: $5.00",
+  "spent_usd": 5.12,
+  "limit_usd": 5.0
+}
+```
+
+Set to `0` (default) to disable. User and team limits are independent.
+
+### Phase 2 — Swarm Governance
+
+Detects sub-agent spawning patterns in the `tools` array and enforces policy before the call goes out:
+
+```env
+CCM_SWARM_ACTION=log          # log only (default)
+CCM_SWARM_ACTION=cap          # cap max_tokens to CCM_SWARM_TOKEN_CAP
+CCM_SWARM_ACTION=block        # require X-CCM-Swarm-Approved: true header
+
+CCM_SWARM_TOOL_NAMES=agent,computer_use   # tools to watch (comma-separated)
+CCM_SWARM_TOKEN_CAP=4096                  # token cap when action=cap
+```
+
+When `block` is set, requests with swarm tools are rejected with `403` unless the client passes `X-CCM-Swarm-Approved: true`. All requests include `X-CCM-Swarm-Detected: true/false` in response headers.
+
+### Phase 3 — Tool-Use Interception
+
+Two automatic behaviors when CC-M detects tool use in the conversation:
+
+**Tool-result downgrade** — when a request contains `tool_result` messages (the follow-up after a tool call), CC-M automatically routes to Haiku instead of Sonnet/Opus. Tool result processing doesn't need full reasoning power.
+
+```env
+CCM_TOOL_RESULT_DOWNGRADE=true   # default: on
+```
+
+**Tool call logging** — CC-M inspects the SSE response stream and logs every `tool_use` block Claude generates, including tool name and input keys:
+
+```
+INFO Tool call: tool=bash inputs=['command'] user=alice model=claude-sonnet-4-6
+INFO Tool call: tool=grep inputs=['pattern', 'path'] user=alice model=claude-sonnet-4-6
+```
+
+```env
+CCM_TOOL_LOG_CALLS=true   # default: on
+```
+
+Both are read-only — SSE passthrough and latency are unaffected.
+
 ## Override
 
 When you *know* you need Opus:
@@ -217,6 +280,13 @@ All env vars use the `CCM_` prefix. Set in `.env`:
 | `CCM_CALIBRATION_ENABLED` | `false` | Enable shadow testing |
 | `CCM_CALIBRATION_SAMPLE_RATE` | `0.2` | Fraction of prompts to shadow |
 | `CCM_CALIBRATION_MAX_PROMPTS` | `50` | Stop after N shadows |
+| `CCM_BUDGET_USER_DAILY_USD` | `0` | Per-user daily spend cap (0 = off) |
+| `CCM_BUDGET_TEAM_DAILY_USD` | `0` | Per-team daily spend cap (0 = off) |
+| `CCM_SWARM_ACTION` | `log` | Swarm policy: `log`, `cap`, or `block` |
+| `CCM_SWARM_TOOL_NAMES` | `agent,computer_use` | Tool names that trigger swarm detection |
+| `CCM_SWARM_TOKEN_CAP` | `4096` | max_tokens cap when `swarm_action=cap` |
+| `CCM_TOOL_RESULT_DOWNGRADE` | `true` | Route tool_result follow-ups to Haiku |
+| `CCM_TOOL_LOG_CALLS` | `true` | Log tool calls detected in response streams |
 
 ## Project Structure
 
