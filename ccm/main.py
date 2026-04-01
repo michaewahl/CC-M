@@ -6,6 +6,7 @@ and routes to the cheapest viable Claude model.
 """
 
 import asyncio
+import hmac
 import json
 import logging
 from contextlib import asynccontextmanager
@@ -30,8 +31,8 @@ async def require_admin(request: Request) -> None:
     if not settings.admin_token:
         return  # no token configured → open access (dev mode)
     auth = request.headers.get("authorization", "")
-    if auth != f"Bearer {settings.admin_token}":
-        raise HTTPException(status_code= 401, detail="Admin token required")
+    if not hmac.compare_digest(auth, f"Bearer {settings.admin_token}"):
+        raise HTTPException(status_code=401, detail="Admin token required")
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("ccm")
@@ -56,6 +57,12 @@ async def lifespan(app: FastAPI):
     log.info("CC-M started on port %d", settings.port)
     log.info("  Tiers: SIMPLE=%s  MEDIUM=%s  COMPLEX=%s",
              settings.model_simple, settings.model_medium, settings.model_complex)
+    if settings.governance_enabled and not settings.admin_token:
+        log.warning(
+            "SECURITY WARNING: CCM_ADMIN_TOKEN is not set. "
+            "All /stats, /usage, and /calibration endpoints are unauthenticated. "
+            "Set CCM_ADMIN_TOKEN in production."
+        )
     if settings.force_model:
         log.info("  FORCE_MODEL=%s (classifier bypassed)", settings.force_model)
     if settings.calibration_enabled:
@@ -135,7 +142,10 @@ async def calibration():
 @app.post("/v1/messages")
 async def proxy_messages(request: Request):
     body_bytes = await request.body()
-    body = json.loads(body_bytes)
+    try:
+        body = json.loads(body_bytes)
+    except (json.JSONDecodeError, ValueError):
+        return JSONResponse(status_code=400, content={"error": "Invalid JSON in request body"})
 
     # --- Tool-result detection ---
     # Check if any user message contains tool_result blocks (follow-up after tool execution)
@@ -405,7 +415,7 @@ async def _stream_response(
         "X-CCM-User": _id.get("user_id", ""),
         "X-CCM-Team": _id.get("team_id", ""),
         "X-CCM-Swarm-Detected": str(_sw.get("is_swarm", False)).lower(),
-        "X-CCM-Tool-Result-Request": str(has_tool_result).lower(),
+        "X-CCM-Tool-Result-Request": str(_sw.get("tool_result", False)).lower(),
     }
 
     return StreamingResponse(
@@ -428,7 +438,13 @@ async def _sync_response(
 ) -> JSONResponse:
     """Non-streaming: forward, log cost, optionally shadow, return."""
     resp = await _client.post(target, json=body, headers=headers, timeout=settings.request_timeout)
-    result = resp.json()
+    try:
+        result = resp.json()
+    except (json.JSONDecodeError, ValueError):
+        return JSONResponse(
+            status_code=resp.status_code,
+            content={"error": "Upstream returned non-JSON response", "status": resp.status_code},
+        )
 
     # Extract tokens from response
     usage = result.get("usage", {})

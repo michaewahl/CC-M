@@ -175,6 +175,10 @@ class CostTracker:
         group_by: str = "user",
     ) -> dict:
         """Query usage data with filtering and grouping for governance."""
+        _ALLOWED_GROUP_BY = {"user", "team", "model", "tier", "day"}
+        if group_by not in _ALLOWED_GROUP_BY:
+            raise ValueError(f"Invalid group_by '{group_by}'. Must be one of: {sorted(_ALLOWED_GROUP_BY)}")
+
         with self._connect() as conn:
             conn.row_factory = sqlite3.Row
 
