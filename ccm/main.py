@@ -20,6 +20,7 @@ from ccm.config import settings
 from ccm.cost import CostTracker, MODEL_PRICING
 from ccm.governance import router as governance_router
 from ccm.plugins import discover_plugins, get_plugins, PluginContext
+from ccm.pruner import prune
 from ccm.shadow import ShadowRunner
 
 # Valid model IDs for override validation (H2 fix)
@@ -197,6 +198,23 @@ async def proxy_messages(request: Request):
             log.info("Classified: tier=%s score=%.1f task=%s → model=%s",
                      tier_label, score, result.task_type, model)
 
+    # --- Skill Pruner ---
+    prune_result = None
+    if settings.pruner_enabled and body.get("tools"):
+        extra = frozenset(
+            n.strip().lower()
+            for n in settings.pruner_extra_blocked.split(",")
+            if n.strip()
+        )
+        prune_result = prune(body["tools"], tier_label, extra_blocked_names=extra)
+        body["tools"] = prune_result.tools or None  # drop key entirely if all removed
+        if prune_result.removed_names:
+            log.info(
+                "Pruner: tier=%s removed=%s kept=%d/%d",
+                tier_label, prune_result.removed_names,
+                prune_result.pruned_count, prune_result.original_count,
+            )
+
     # Rewrite model in request body
     original_model = body.get("model", "")
     body["model"] = model
@@ -295,7 +313,12 @@ async def proxy_messages(request: Request):
     is_streaming = body.get("stream", False)
 
     identity = {"user_id": user_id, "team_id": team_id, "api_key_fingerprint": api_key_fingerprint}
-    swarm_meta = {"is_swarm": is_swarm, "swarm_tools": swarm_tools_detected, "tool_result": has_tool_result}
+    swarm_meta = {
+        "is_swarm": is_swarm,
+        "swarm_tools": swarm_tools_detected,
+        "tool_result": has_tool_result,
+        "tools_pruned": len(prune_result.removed_names) if prune_result else 0,
+    }
 
     if is_streaming:
         return await _stream_response(
@@ -416,6 +439,7 @@ async def _stream_response(
         "X-CCM-Team": _id.get("team_id", ""),
         "X-CCM-Swarm-Detected": str(_sw.get("is_swarm", False)).lower(),
         "X-CCM-Tool-Result-Request": str(_sw.get("tool_result", False)).lower(),
+        "X-CCM-Tools-Pruned": str(_sw.get("tools_pruned", 0)),
     }
 
     return StreamingResponse(
@@ -501,6 +525,7 @@ async def _sync_response(
         "X-CCM-Swarm-Detected": str(_sw.get("is_swarm", False)).lower(),
         "X-CCM-Tool-Calls": str(len(tool_calls_sync)),
         "X-CCM-Tool-Result-Request": str(_sw.get("tool_result", False)).lower(),
+        "X-CCM-Tools-Pruned": str(_sw.get("tools_pruned", 0)),
     }
 
     return JSONResponse(

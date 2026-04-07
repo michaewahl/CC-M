@@ -18,6 +18,7 @@ CC-M intercepts `/v1/messages`, scores prompt complexity, rewrites the `model` f
 - `ccm/cost.py` — SQLite cost tracking, pricing, GET /stats, governance queries (get_usage)
 - `ccm/governance.py` — /usage endpoints for team visibility (APIRouter)
 - `ccm/equivalence.py` — Response equivalence scoring (divergence detection)
+- `ccm/pruner.py` — Skill Pruner: tier-aware tool array stripping (removes risky/heavy tools from Haiku/Sonnet payloads)
 - `ccm/shadow.py` — Background shadow calibration (dual-route to Opus, compare, report)
 - `ccm/compare.py` — CLI demo tool: send prompt to all 3 tiers, show side-by-side
 
@@ -54,3 +55,4 @@ python -m ccm.compare "Explain what a Python decorator is"
 - Admin auth: set `CCM_ADMIN_TOKEN` to require `Authorization: Bearer <token>` for /stats, /calibration, /usage endpoints
 - Governance router gated by `CCM_GOVERNANCE_ENABLED` (default: true)
 - Shadow calibration is opt-in (`CCM_CALIBRATION_ENABLED=true`), sampled (20% default), and capped
+- Skill Pruner strips risky tools (Bash, Agent, MCP heavy) from SIMPLE/MEDIUM payloads; disable via `CCM_PRUNER_ENABLED=false`; add extra blocked names with `CCM_PRUNER_EXTRA_BLOCKED=tool1,tool2`; COMPLEX/OVERRIDE/FORCED tiers receive the full tool set unchanged; pruned count reported in `X-CCM-Tools-Pruned` response header

@@ -48,6 +48,7 @@ class ShadowRunner:
         self._db_path = str(resolved)
         self._init_db()
         self._shadow_count = self._get_shadow_count()
+        self._lock = asyncio.Lock()
 
     def _init_db(self) -> None:
         with sqlite3.connect(self._db_path) as conn:
@@ -63,19 +64,17 @@ class ShadowRunner:
             return row[0] if row else 0
 
     def should_shadow(self, tier: str) -> bool:
-        """Decide whether to shadow this request."""
+        """Decide whether to shadow this request.
+
+        Note: the count check here is a best-effort pre-filter only. The
+        authoritative cap enforcement happens under _lock in run_shadow.
+        """
         if not settings.calibration_enabled:
             return False
-
-        # Don't shadow if already at Opus
         if tier == "COMPLEX":
             return False
-
-        # Don't shadow if we've hit the max
         if self._shadow_count >= settings.calibration_max_prompts:
             return False
-
-        # Sample rate check
         return random.random() < settings.calibration_sample_rate
 
     async def run_shadow(
@@ -128,21 +127,24 @@ class ShadowRunner:
                 usage.get("output_tokens", 0),
             )
 
-            # Log to SQLite
-            with self._connect() as conn:
-                conn.execute(
-                    """INSERT INTO shadow_log
-                       (served_model, served_tier, shadow_model,
-                        equivalence_score, equivalent,
-                        length_ratio, code_match, key_overlap,
-                        both_completed, shadow_cost_usd)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                    (served_model, served_tier, opus_model,
-                     eq.score, int(eq.equivalent),
-                     eq.length_ratio, int(eq.code_match), eq.key_overlap,
-                     int(eq.both_completed), shadow_cost),
-                )
-            self._shadow_count += 1
+            # Log to SQLite and increment count under lock to prevent cap races
+            async with self._lock:
+                if self._shadow_count >= settings.calibration_max_prompts:
+                    return
+                with self._connect() as conn:
+                    conn.execute(
+                        """INSERT INTO shadow_log
+                           (served_model, served_tier, shadow_model,
+                            equivalence_score, equivalent,
+                            length_ratio, code_match, key_overlap,
+                            both_completed, shadow_cost_usd)
+                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                        (served_model, served_tier, opus_model,
+                         eq.score, int(eq.equivalent),
+                         eq.length_ratio, int(eq.code_match), eq.key_overlap,
+                         int(eq.both_completed), shadow_cost),
+                    )
+                self._shadow_count += 1
 
             log.info(
                 "Shadow: %s vs %s → equivalence=%.2f (%s) cost=$%.4f [%d/%d]",

@@ -51,6 +51,11 @@ class CCMSettings(BaseSettings):
     # Enterprise license
     license_key: str = ""  # passed to enterprise plugin for validation
 
+    # Skill Pruner — tier-aware tool stripping
+    pruner_enabled: bool = True          # set False to disable pruning entirely
+    # Extra tool names (comma-separated) to strip on ALL non-COMPLEX tiers
+    pruner_extra_blocked: str = ""
+
     # Shadow calibration mode
     calibration_enabled: bool = False
     calibration_sample_rate: float = 0.2   # shadow 1 in 5 prompts
