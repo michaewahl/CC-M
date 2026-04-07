@@ -92,6 +92,12 @@ class ShadowRunner:
         shadow_body = {**body, "model": opus_model, "stream": False}
 
         try:
+            # Claim a slot under lock before making the API call to prevent budget overrun
+            async with self._lock:
+                if self._shadow_count >= settings.calibration_max_prompts:
+                    return
+                self._shadow_count += 1
+
             headers = {
                 "x-api-key": api_key,
                 "anthropic-version": "2023-06-01",
@@ -127,24 +133,20 @@ class ShadowRunner:
                 usage.get("output_tokens", 0),
             )
 
-            # Log to SQLite and increment count under lock to prevent cap races
-            async with self._lock:
-                if self._shadow_count >= settings.calibration_max_prompts:
-                    return
-                with self._connect() as conn:
-                    conn.execute(
-                        """INSERT INTO shadow_log
-                           (served_model, served_tier, shadow_model,
-                            equivalence_score, equivalent,
-                            length_ratio, code_match, key_overlap,
-                            both_completed, shadow_cost_usd)
-                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                        (served_model, served_tier, opus_model,
-                         eq.score, int(eq.equivalent),
-                         eq.length_ratio, int(eq.code_match), eq.key_overlap,
-                         int(eq.both_completed), shadow_cost),
-                    )
-                self._shadow_count += 1
+            # Write result to SQLite (slot was already claimed above)
+            with self._connect() as conn:
+                conn.execute(
+                    """INSERT INTO shadow_log
+                       (served_model, served_tier, shadow_model,
+                        equivalence_score, equivalent,
+                        length_ratio, code_match, key_overlap,
+                        both_completed, shadow_cost_usd)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (served_model, served_tier, opus_model,
+                     eq.score, int(eq.equivalent),
+                     eq.length_ratio, int(eq.code_match), eq.key_overlap,
+                     int(eq.both_completed), shadow_cost),
+                )
 
             log.info(
                 "Shadow: %s vs %s → equivalence=%.2f (%s) cost=$%.4f [%d/%d]",

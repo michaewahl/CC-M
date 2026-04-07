@@ -6,6 +6,7 @@ and routes to the cheapest viable Claude model.
 """
 
 import asyncio
+import hashlib
 import hmac
 import json
 import logging
@@ -42,11 +43,13 @@ _client: httpx.AsyncClient | None = None
 _tracker: CostTracker | None = None
 _shadow: ShadowRunner | None = None
 
-_TIER_TO_MODEL = {
-    "SIMPLE": settings.model_simple,
-    "MEDIUM": settings.model_medium,
-    "COMPLEX": settings.model_complex,
-}
+def _tier_to_model(tier_label: str) -> str:
+    """Read model mapping from settings at request time (not frozen at import)."""
+    return {
+        "SIMPLE": settings.model_simple,
+        "MEDIUM": settings.model_medium,
+        "COMPLEX": settings.model_complex,
+    }.get(tier_label, settings.model_complex)
 
 
 @asynccontextmanager
@@ -95,15 +98,7 @@ if settings.governance_enabled:
 
 @app.get("/health")
 async def health():
-    stats = _tracker.get_stats()
-    return {
-        "status": "ok",
-        "service": "cc-m",
-        "total_requests": stats.get("total_requests", 0),
-        "model_distribution": stats.get("model_distribution", {}),
-        "calibration_enabled": settings.calibration_enabled,
-        "force_model": settings.force_model or None,
-    }
+    return {"status": "ok", "service": "cc-m"}
 
 
 @app.get("/license")
@@ -192,7 +187,7 @@ async def proxy_messages(request: Request):
         )
         tier_label = result.tier.value
         score = result.score
-        model = _TIER_TO_MODEL[tier_label]
+        model = _tier_to_model(tier_label)
 
         if settings.log_classifications:
             log.info("Classified: tier=%s score=%.1f task=%s → model=%s",
@@ -234,14 +229,26 @@ async def proxy_messages(request: Request):
                     settings.swarm_action)
 
         if settings.swarm_action == "block":
-            approved = request.headers.get(settings.swarm_require_header, "").lower()
-            if approved != "true":
+            token = request.headers.get(settings.swarm_require_header, "")
+            approved = False
+            if settings.swarm_approval_secret:
+                # Require HMAC-signed token: HMAC-SHA256(secret, "swarm-approved")
+                expected = hmac.new(
+                    settings.swarm_approval_secret.encode(),
+                    b"swarm-approved",
+                    digestmod="sha256",
+                ).hexdigest()
+                approved = hmac.compare_digest(token, expected)
+            else:
+                # No secret configured — fall back to presence check only (dev mode)
+                approved = token.lower() == "true"
+            if not approved:
                 return JSONResponse(
                     status_code=403,
                     content={
                         "error": "swarm_approval_required",
-                        "message": "Sub-agent spawning detected. Pass "
-                                   f"'{settings.swarm_require_header}: true' to proceed.",
+                        "message": "Sub-agent spawning detected. Provide a valid approval token "
+                                   f"in the '{settings.swarm_require_header}' header.",
                         "tools_detected": swarm_tools_detected,
                     },
                 )
@@ -252,8 +259,12 @@ async def proxy_messages(request: Request):
                 log.info("Swarm token cap applied: max_tokens capped at %d", settings.swarm_token_cap)
 
     # --- Identity (governance) ---
-    api_key = request.headers.get("x-api-key", "") or settings.anthropic_api_key
-    api_key_fingerprint = f"key:{api_key[-8:]}" if len(api_key) >= 8 else ""
+    # Always use the configured key — never forward client-supplied credentials.
+    api_key = settings.anthropic_api_key
+    api_key_fingerprint = (
+        "key:" + hashlib.sha256(api_key.encode()).hexdigest()[:16]
+        if api_key else ""
+    )
     user_id = request.headers.get("x-ccm-user", "")
     team_id = request.headers.get("x-ccm-team", "")
     if not user_id:
@@ -296,7 +307,7 @@ async def proxy_messages(request: Request):
     if not api_key:
         return JSONResponse(
             status_code=401,
-            content={"error": "No API key. Set CCM_ANTHROPIC_API_KEY or pass x-api-key header."},
+            content={"error": "No API key. Set CCM_ANTHROPIC_API_KEY."},
         )
 
     headers = {
@@ -304,10 +315,19 @@ async def proxy_messages(request: Request):
         "anthropic-version": request.headers.get("anthropic-version", "2023-06-01"),
         "content-type": "application/json",
     }
-    # Pass through optional Anthropic headers
-    for h in ("anthropic-beta",):
-        if val := request.headers.get(h):
-            headers[h] = val
+    # Only pass through permitted anthropic-beta feature flags
+    _ALLOWED_BETA_FLAGS = {
+        "interleaved-thinking-2025-05-14",
+        "token-efficient-tools-2025-02-19",
+        "extended-cache-ttl-2025-01-13",
+        "max-tokens-3-5-sonnet-2024-10-22",
+    }
+    if beta_val := request.headers.get("anthropic-beta", ""):
+        allowed = ",".join(
+            f for f in (v.strip() for v in beta_val.split(",")) if f in _ALLOWED_BETA_FLAGS
+        )
+        if allowed:
+            headers["anthropic-beta"] = allowed
 
     target = f"{settings.anthropic_base_url}/v1/messages"
     is_streaming = body.get("stream", False)

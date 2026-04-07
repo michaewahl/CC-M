@@ -179,41 +179,48 @@ class CostTracker:
         if group_by not in _ALLOWED_GROUP_BY:
             raise ValueError(f"Invalid group_by '{group_by}'. Must be one of: {sorted(_ALLOWED_GROUP_BY)}")
 
+        # days is already validated as int by callers; clamp defensively
+        days_clamped = min(max(int(days), 1), 90)
+
+        # Static map of validated group-by expressions — never interpolate user input
+        _GROUP_EXPRS = {
+            "user":  ("user_id",         "user_id"),
+            "team":  ("team_id",         "team_id"),
+            "model": ("model_used",      "model_used"),
+            "tier":  ("complexity_tier", "complexity_tier"),
+            "day":   ("date(timestamp)", "date_timestamp"),
+        }
+        group_expr, group_alias = _GROUP_EXPRS.get(group_by, _GROUP_EXPRS["user"])
+
         with self._connect() as conn:
             conn.row_factory = sqlite3.Row
 
-            # Build WHERE clause
-            conditions = [f"timestamp >= datetime('now', '-{min(days, 90)} days')"]
-            params: list[str] = []
+            # Build WHERE clause — only parameterized values, no interpolation
+            params: list = [days_clamped]
+            user_clause = ""
+            team_clause = ""
             if user:
-                conditions.append("user_id = ?")
+                user_clause = "AND user_id = ?"
                 params.append(user)
             if team:
-                conditions.append("team_id = ?")
+                team_clause = "AND team_id = ?"
                 params.append(team)
-            where = " AND ".join(conditions)
 
-            # Totals for the period
+            # Totals for the period — static query with parameterized filters
             totals = conn.execute(f"""
                 SELECT
                     COUNT(*) as requests,
                     COALESCE(SUM(actual_cost_usd), 0) as cost_usd,
                     COALESCE(SUM(savings_usd), 0) as savings_usd
-                FROM request_log WHERE {where}
+                FROM request_log
+                WHERE timestamp >= datetime('now', '-' || ? || ' days')
+                {user_clause} {team_clause}
             """, params).fetchone()
 
-            # Group-by breakdown
-            group_col = {
-                "user": "user_id",
-                "team": "team_id",
-                "model": "model_used",
-                "tier": "complexity_tier",
-                "day": "date(timestamp)",
-            }.get(group_by, "user_id")
-
+            # Group-by breakdown — group_expr comes from a hard-coded allowlist above
             breakdown = conn.execute(f"""
                 SELECT
-                    {group_col} as group_key,
+                    {group_expr} as group_key,
                     COUNT(*) as requests,
                     COALESCE(SUM(actual_cost_usd), 0) as cost_usd,
                     COALESCE(SUM(savings_usd), 0) as savings_usd,
@@ -222,8 +229,9 @@ class CostTracker:
                     SUM(CASE WHEN complexity_tier = 'MEDIUM' THEN 1 ELSE 0 END) as sonnet_count,
                     SUM(CASE WHEN complexity_tier = 'COMPLEX' THEN 1 ELSE 0 END) as opus_count
                 FROM request_log
-                WHERE {where}
-                GROUP BY {group_col}
+                WHERE timestamp >= datetime('now', '-' || ? || ' days')
+                {user_clause} {team_clause}
+                GROUP BY {group_expr}
                 ORDER BY cost_usd DESC
             """, params).fetchall()
 

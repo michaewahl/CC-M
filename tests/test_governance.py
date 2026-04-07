@@ -26,7 +26,8 @@ def tracker(tmp_path):
 @pytest.fixture
 def client(tracker):
     """Client with admin_token unset (open access / dev mode)."""
-    with patch("ccm.governance._get_tracker", return_value=tracker), \
+    import ccm.main as _main
+    with patch.object(_main, "_tracker", tracker), \
          patch("ccm.main.settings") as mock_settings:
         mock_settings.admin_token = ""
         from ccm.governance import router
@@ -38,7 +39,8 @@ def client(tracker):
 @pytest.fixture
 def secured_client(tracker):
     """Client with admin_token set — requires Authorization header."""
-    with patch("ccm.governance._get_tracker", return_value=tracker), \
+    import ccm.main as _main
+    with patch.object(_main, "_tracker", tracker), \
          patch("ccm.main.settings") as mock_settings:
         mock_settings.admin_token = "test-secret"
         from ccm.governance import router

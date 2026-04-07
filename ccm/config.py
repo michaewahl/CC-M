@@ -37,6 +37,7 @@ class CCMSettings(BaseSettings):
     swarm_tool_names: str = "agent,computer_use"  # comma-separated tool names to watch
     swarm_token_cap: int = 4096                   # max_tokens cap when action=cap
     swarm_require_header: str = "x-ccm-swarm-approved"  # header required when action=block
+    swarm_approval_secret: str = ""  # HMAC secret for swarm approval tokens (empty = disabled)
 
     # Logging
     log_classifications: bool = True
